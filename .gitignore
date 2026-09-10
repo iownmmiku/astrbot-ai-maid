@@ -1,0 +1,15 @@
+# Java / Gradle
+.gradle/
+build/
+out/
+*.class
+
+# Fabric / Loom
+run/
+.loom-cache/
+.idea/
+*.iml
+.vscode/
+
+# 日志
+*.log

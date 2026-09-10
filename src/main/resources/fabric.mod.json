@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "id": "astrbot_ai_maid",
+  "version": "${version}",
+  "name": "AstrBot AI Maid",
+  "description": "由 AstrBot 驱动的 AI 女仆实体：自带背包与行为，可被外部指挥。",
+  "authors": ["iownmmiku"],
+  "license": "MIT",
+  "environment": "server",
+  "entrypoints": {
+    "main": ["com.iownmmiku.maid.AiMaidMod"]
+  },
+  "depends": {
+    "fabricloader": ">=0.15.0",
+    "minecraft": "~1.20.1",
+    "java": ">=17",
+    "fabric-api": "*"
+  }
+}
