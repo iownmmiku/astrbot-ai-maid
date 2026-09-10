@@ -3,6 +3,7 @@ package com.iownmmiku.maid;
 import net.minecraft.block.Block;
 import net.minecraft.block.BlockState;
 import net.minecraft.block.Blocks;
+import net.minecraft.entity.ItemEntity;
 import net.minecraft.entity.passive.AnimalEntity;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
@@ -23,6 +24,11 @@ public final class GoalExecutor {
      * @return null 表示目标完成，否则返回进度描述
      */
     public static String executeStep(ServerPlayerEntity maid, MaidGoals.Goal goal, Map<String, Integer> progress) {
+        // 通用前置：优先拾取附近掉落物（挖的树/矿石掉地上要捡起来才有用）
+        String pickup = pickupDrops(maid, progress);
+        if (pickup != null) {
+            return pickup;
+        }
         switch (goal.type) {
             case GATHER_WOOD:
                 return gatherWood(maid, progress);
@@ -128,23 +134,18 @@ public final class GoalExecutor {
             MaidActions.countItem(maid, "wooden_axe") > 0) {
             return null;
         }
-        // 先合成木板
+        // 一步一动作：每次 tick 只做一件事，防止疯狂合成
         if (MaidActions.countItem(maid, "oak_planks") < 10) {
-            MaidCrafting.craft(maid, "oak_planks");
+            String err = MaidCrafting.craft(maid, "oak_planks");
+            return err != null ? "合成木板失败：" + err : "合成木板";
         }
-        // 合成木镐
         if (MaidActions.countItem(maid, "wooden_pickaxe") == 0) {
             String err = MaidCrafting.craft(maid, "wooden_pickaxe");
-            if (err != null) {
-                return "合成木镐失败：" + err;
-            }
+            return err != null ? "合成木镐失败：" + err : "合成木镐";
         }
-        // 合成木斧
         if (MaidActions.countItem(maid, "wooden_axe") == 0) {
             String err = MaidCrafting.craft(maid, "wooden_axe");
-            if (err != null) {
-                return "合成木斧失败：" + err;
-            }
+            return err != null ? "合成木斧失败：" + err : "合成木斧";
         }
         return null;
     }
@@ -179,14 +180,12 @@ public final class GoalExecutor {
     }
 
     private static String craftStoneTools(ServerPlayerEntity maid, Map<String, Integer> progress) {
+        // 一步一动作：每次 tick 只合成一个物品
         String[] items = {"stone_pickaxe", "stone_axe", "stone_sword", "furnace", "crafting_table"};
         for (String item : items) {
             if (MaidActions.countItem(maid, item) == 0) {
                 String err = MaidCrafting.craft(maid, item);
-                if (err != null) {
-                    return "合成 " + item + " 失败：" + err;
-                }
-                return "合成 " + item;
+                return err != null ? "合成 " + item + " 失败：" + err : "合成 " + item;
             }
         }
         return null;
@@ -247,29 +246,26 @@ public final class GoalExecutor {
     }
 
     private static String craftIronGear(ServerPlayerEntity maid, Map<String, Integer> progress) {
+        // 一步一动作
         String[] items = {"iron_pickaxe", "iron_sword", "iron_helmet", "iron_chestplate", "iron_leggings", "iron_boots"};
         for (String item : items) {
             if (MaidActions.countItem(maid, item) == 0) {
                 String err = MaidCrafting.craft(maid, item);
-                if (err != null) {
-                    return "合成 " + item + " 失败：" + err;
-                }
-                return "合成 " + item;
+                return err != null ? "合成 " + item + " 失败：" + err : "合成 " + item;
             }
         }
         return null;
     }
 
     private static String craftDiamondTools(ServerPlayerEntity maid, Map<String, Integer> progress) {
+        // 一步一动作
         if (MaidActions.countItem(maid, "diamond_pickaxe") == 0) {
             String err = MaidCrafting.craft(maid, "diamond_pickaxe");
-            if (err != null) return "合成钻石镐失败：" + err;
-            return "合成钻石镐";
+            return err != null ? "合成钻石镐失败：" + err : "合成钻石镐";
         }
         if (MaidActions.countItem(maid, "diamond_sword") == 0) {
             String err = MaidCrafting.craft(maid, "diamond_sword");
-            if (err != null) return "合成钻石剑失败：" + err;
-            return "合成钻石剑";
+            return err != null ? "合成钻石剑失败：" + err : "合成钻石剑";
         }
         return null;
     }
@@ -371,6 +367,28 @@ public final class GoalExecutor {
     }
 
     // === 辅助方法 ===
+    /** 拾取附近 6 格内的掉落物。没有掉落物返回 null；超过 5 秒捡不起来就放弃。 */
+    private static String pickupDrops(ServerPlayerEntity maid, Map<String, Integer> progress) {
+        int pt = progress.getOrDefault("pickup_ticks", 0);
+        ServerWorld world = maid.getServerWorld();
+        Box box = maid.getBoundingBox().expand(6.0);
+        List<ItemEntity> items = world.getEntitiesByClass(ItemEntity.class, box, e -> e.isAlive());
+        if (items.isEmpty()) {
+            progress.put("pickup_ticks", 0);
+            return null;
+        }
+        if (pt > 100) {
+            // 5 秒捡不起来（可能掉进岩浆/卡在缝隙）→ 放弃，去做正事
+            progress.put("pickup_ticks", 0);
+            return null;
+        }
+        progress.put("pickup_ticks", pt + 1);
+        items.sort((a, b) -> Double.compare(a.squaredDistanceTo(maid), b.squaredDistanceTo(maid)));
+        ItemEntity item = items.get(0);
+        MaidBrain.gotoTo(maid, item.getX(), item.getZ());
+        return "拾取掉落物";
+    }
+
     private static BlockPos findNearbyBlock(ServerPlayerEntity maid, Block block, double range) {
         ServerWorld world = maid.getServerWorld();
         BlockPos center = maid.getBlockPos();

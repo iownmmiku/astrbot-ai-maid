@@ -57,7 +57,8 @@ public final class MaidBrain {
             return -1;
         }
         List<BlockPos> path = Pathfinder.find(w, start, goal, 6000, 48);
-        if (path == null) {
+        if (path == null || path.size() <= 1) {
+            // 空路径/目标就在脚下 → 直线走，不缓存（避免每 tick 重算刷屏）
             walkTo(maid, x, z);
             return -1;
         }
@@ -205,9 +206,15 @@ public final class MaidBrain {
             if (path != null) {
                 int idx = PATH_IDX.getOrDefault(k, 0);
                 if (idx >= path.size()) {
-                    stop(maid);
-                    AiMaidMod.LOGGER.info("[AI-Maid] {} arrived (path end)", k);
-                    MaidEvents.arrived(maid, maid.getX(), maid.getY(), maid.getZ());
+                    // 路径走完，但直线目标还很远（比如路径只覆盖了部分距离）→ 继续直线走
+                    double[] tgt = TARGETS.get(k);
+                    double rem = (tgt == null) ? 0 : Math.hypot(tgt[0] - maid.getX(), tgt[1] - maid.getZ());
+                    if (rem > 2.0) {
+                        walkTo(maid, tgt[0], tgt[1]);
+                    } else {
+                        stop(maid);
+                        MaidEvents.arrived(maid, maid.getX(), maid.getY(), maid.getZ());
+                    }
                     maid.tickMovement();
                     continue;
                 }
