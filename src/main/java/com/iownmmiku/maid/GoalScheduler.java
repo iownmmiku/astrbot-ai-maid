@@ -1,5 +1,6 @@
 package com.iownmmiku.maid;
 
+import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import net.minecraft.nbt.NbtCompound;
 import net.minecraft.server.network.ServerPlayerEntity;
@@ -22,6 +23,64 @@ public final class GoalScheduler {
     private static final Map<String, Set<MaidGoals.GoalType>> COMPLETED_GOALS = new HashMap<>();
     /** 在当前环境下无法完成的目标（例如超平坦世界里的挖矿），不重试。 */
     private static final Map<String, Set<MaidGoals.GoalType>> BLOCKED_GOALS = new HashMap<>();
+    /** 是否启用 LLM 决策（由插件通过桥开启）。 */
+    private static boolean LLM_DECISION_ENABLED = false;
+    private static final Set<String> DECISION_PENDING = new HashSet<>();
+    private static final Map<String, Long> DECISION_ASKED_AT = new HashMap<>();
+
+    public static void setLlmDecisionEnabled(boolean enabled) {
+        LLM_DECISION_ENABLED = enabled;
+        AiMaidMod.LOGGER.info("[AI-Maid] LLM 决策：{}", enabled ? "已启用" : "已禁用");
+    }
+
+    public static boolean isLlmDecisionEnabled() {
+        return LLM_DECISION_ENABLED;
+    }
+
+    /** 向外部（AstrBot/LLM）请求下一步决策。 */
+    private static void emitDecisionRequest(ServerPlayerEntity maid) {
+        String key = key(maid);
+        Set<MaidGoals.GoalType> completed = COMPLETED_GOALS.getOrDefault(key, new HashSet<>());
+        Set<MaidGoals.GoalType> blocked = BLOCKED_GOALS.getOrDefault(key, new HashSet<>());
+
+        JsonObject ev = new JsonObject();
+        ev.addProperty("event", "decision_needed");
+        ev.addProperty("who", key);
+        ev.addProperty("health", maid.getHealth());
+        ev.addProperty("food", maid.getHungerManager().getFoodLevel());
+        ev.addProperty("x", maid.getBlockX());
+        ev.addProperty("y", maid.getBlockY());
+        ev.addProperty("z", maid.getBlockZ());
+
+        JsonArray inv = new JsonArray();
+        for (String s : MaidActions.inventory(maid)) inv.add(s);
+        ev.add("inventory", inv);
+
+        JsonArray done = new JsonArray();
+        for (MaidGoals.GoalType t : completed) done.add(MaidGoals.get(t).name);
+        ev.add("completed", done);
+
+        JsonArray avail = new JsonArray();
+        for (MaidGoals.Goal g : MaidGoals.getAllGoals()) {
+            if (completed.contains(g.type) || blocked.contains(g.type)) continue;
+            if (!g.prerequisites.isEmpty()) {
+                boolean ready = true;
+                for (MaidGoals.GoalType p : g.prerequisites) {
+                    if (!completed.contains(p) || blocked.contains(p)) { ready = false; break; }
+                }
+                if (!ready) continue;
+            }
+            JsonObject o = new JsonObject();
+            o.addProperty("id", g.type.name());
+            o.addProperty("name", g.name);
+            o.addProperty("description", g.description);
+            o.addProperty("priority", g.priority);
+            avail.add(o);
+        }
+        ev.add("available_goals", avail);
+        BridgeServer.emit(ev);
+        AiMaidMod.LOGGER.info("[AI-Maid] 已向 LLM 请求决策（{} 个候选目标）", avail.size());
+    }
 
     private GoalScheduler() {
     }
@@ -61,8 +120,23 @@ public final class GoalScheduler {
             return;
         }
 
-        // 3. 没有当前目标 → 选择下一个
+        // 3. 没有当前目标 → 选择下一个（优先问 LLM）
         if (maid.age % 40 == 0) {  // 每 2 秒检查一次
+            long now = System.currentTimeMillis();
+            if (LLM_DECISION_ENABLED) {
+                if (DECISION_PENDING.contains(key)) {
+                    // 等 LLM 回复（最多 4 秒）
+                    if (now - DECISION_ASKED_AT.getOrDefault(key, 0L) < 4000) {
+                        return;
+                    }
+                    DECISION_PENDING.remove(key);   // 超时 → 规则兜底
+                } else {
+                    DECISION_PENDING.add(key);
+                    DECISION_ASKED_AT.put(key, now);
+                    emitDecisionRequest(maid);
+                    return;
+                }
+            }
             MaidGoals.GoalType next = selectNextGoal(maid);
             if (next != null) {
                 startGoal(maid, next);
@@ -307,6 +381,7 @@ public final class GoalScheduler {
      * 手动设置目标（通过桥接口）。
      */
     public static void setGoal(ServerPlayerEntity maid, MaidGoals.GoalType type) {
+        DECISION_PENDING.remove(key(maid));   // LLM 已给出决策
         startGoal(maid, type);
     }
 

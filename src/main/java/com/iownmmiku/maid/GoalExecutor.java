@@ -72,7 +72,7 @@ public final class GoalExecutor {
     }
 
     private static String gatherWood(ServerPlayerEntity maid, Map<String, Integer> progress) {
-        int have = MaidActions.countItem(maid, "oak_log");
+        int have = MaidActions.countLogs(maid);   // 任意原木都算
         if (have >= 16) {
             return null;  // 完成
         }
@@ -93,8 +93,8 @@ public final class GoalExecutor {
             }
         }
 
-        // 找附近的树（原木方块）
-        BlockPos tree = findNearbyBlock(maid, Blocks.OAK_LOG, 24.0);
+        // 找附近的树（任意树种的原木方块）
+        BlockPos tree = findNearbyLog(maid, 24.0);
         if (tree == null) {
             // 找不到树 → 环形主动搜索：向 8 个方向依次走 16~80 格，边走边找
             int homeX = progress.get("home_x");
@@ -403,26 +403,69 @@ public final class GoalExecutor {
     }
 
     // === 辅助方法 ===
-    /** 拾取附近 6 格内的掉落物。没有掉落物返回 null；超过 5 秒捡不起来就放弃。 */
+    /**
+     * 拾取掉落物（有节制的）：
+     * - 只捡 6 格内、高度差 ≤ 2 的（够得着的）
+     * - 捡不到 2 秒就进冷却（200 tick），期间专心做正事
+     * - 冷却结束后才允许再捡
+     */
     private static String pickupDrops(ServerPlayerEntity maid, Map<String, Integer> progress) {
-        int pt = progress.getOrDefault("pickup_ticks", 0);
+        int cooldown = progress.getOrDefault("pickup_cd", 0);
+        if (cooldown > 0) {
+            progress.put("pickup_cd", cooldown - 1);
+            return null;
+        }
+
         ServerWorld world = maid.getServerWorld();
         Box box = maid.getBoundingBox().expand(6.0);
-        List<ItemEntity> items = world.getEntitiesByClass(ItemEntity.class, box, e -> e.isAlive());
+        List<ItemEntity> items = world.getEntitiesByClass(ItemEntity.class, box,
+                e -> e.isAlive() && Math.abs(e.getY() - maid.getY()) <= 2.0);
         if (items.isEmpty()) {
             progress.put("pickup_ticks", 0);
             return null;
         }
-        if (pt > 100) {
-            // 5 秒捡不起来（可能掉进岩浆/卡在缝隙）→ 放弃，去做正事
+        items.sort((a, b) -> Double.compare(a.squaredDistanceTo(maid), b.squaredDistanceTo(maid)));
+        ItemEntity item = items.get(0);
+
+        // 贴脸（1.6 格内）→ 原版会自己吸走，不用再走
+        if (maid.distanceTo(item) < 1.6) {
             progress.put("pickup_ticks", 0);
             return null;
         }
+
+        int pt = progress.getOrDefault("pickup_ticks", 0);
+        if (pt > 40) {                  // 2 秒还走不到 → 进冷却 10 秒，专心干活
+            progress.put("pickup_ticks", 0);
+            progress.put("pickup_cd", 200);
+            AiMaidMod.LOGGER.debug("[AI-Maid] {} 放弃拾取（超时），冷却 10 秒", maid.getGameProfile().getName());
+            return null;
+        }
         progress.put("pickup_ticks", pt + 1);
-        items.sort((a, b) -> Double.compare(a.squaredDistanceTo(maid), b.squaredDistanceTo(maid)));
-        ItemEntity item = items.get(0);
         MaidBrain.gotoTo(maid, item.getX(), item.getZ());
         return "拾取掉落物";
+    }
+
+    /** 找附近任意一种原木方块（橡木/云杉/白桦/丛林木/金合欢/深色橡木/红树）。 */
+    private static BlockPos findNearbyLog(ServerPlayerEntity maid, double range) {
+        ServerWorld world = maid.getServerWorld();
+        BlockPos center = maid.getBlockPos();
+        int r = (int) range;
+        BlockPos best = null;
+        double bestD = Double.MAX_VALUE;
+        for (int dx = -r; dx <= r; dx++) {
+            for (int dy = -10; dy <= 16; dy++) {
+                for (int dz = -r; dz <= r; dz++) {
+                    BlockPos pos = center.add(dx, dy, dz);
+                    net.minecraft.block.BlockState s = world.getBlockState(pos);
+                    String path = net.minecraft.registry.Registries.BLOCK.getId(s.getBlock()).getPath();
+                    if (path.endsWith("_log") && !path.startsWith("stripped")) {
+                        double d = center.getSquaredDistance(pos);
+                        if (d < bestD) { bestD = d; best = pos; }
+                    }
+                }
+            }
+        }
+        return best;
     }
 
     private static BlockPos findNearbyBlock(ServerPlayerEntity maid, Block block, double range) {

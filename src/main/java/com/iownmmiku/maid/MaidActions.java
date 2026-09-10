@@ -184,6 +184,53 @@ public final class MaidActions {
         return out;
     }
 
+    /** 是不是原木（任意树种）。 */
+    public static boolean isLog(ItemStack s) {
+        if (s.isEmpty()) return false;
+        return Registries.ITEM.getId(s.getItem()).getPath().endsWith("_log");
+    }
+
+    /** 统计背包里所有原木的总数。 */
+    public static int countLogs(ServerPlayerEntity maid) {
+        int total = 0;
+        PlayerInventory inv = maid.getInventory();
+        for (int i = 0; i < inv.size(); i++) {
+            ItemStack s = inv.getStack(i);
+            if (isLog(s)) total += s.getCount();
+        }
+        return total;
+    }
+
+    /** 找背包里第一种原木的 id（如 spruce_log）。 */
+    public static String findLogType(ServerPlayerEntity maid) {
+        PlayerInventory inv = maid.getInventory();
+        for (int i = 0; i < inv.size(); i++) {
+            ItemStack s = inv.getStack(i);
+            if (isLog(s)) {
+                return Registries.ITEM.getId(s.getItem()).getPath();
+            }
+        }
+        return null;
+    }
+
+    /** 消耗若干物品。 */
+    public static boolean consume(ServerPlayerEntity maid, String itemId, int count) {
+        Identifier id = itemId.contains(":") ? new Identifier(itemId) : new Identifier("minecraft", itemId);
+        if (!Registries.ITEM.containsId(id)) return false;
+        Item target = Registries.ITEM.get(id);
+        int remain = count;
+        PlayerInventory inv = maid.getInventory();
+        for (int i = 0; i < inv.size() && remain > 0; i++) {
+            ItemStack s = inv.getStack(i);
+            if (!s.isEmpty() && s.getItem() == target) {
+                int take = Math.min(s.getCount(), remain);
+                s.decrement(take);
+                remain -= take;
+            }
+        }
+        return remain == 0;
+    }
+
     /** 统计背包里某物品的总数。 */
     public static int countItem(ServerPlayerEntity maid, String itemId) {
         Identifier id = itemId.contains(":") ? new Identifier(itemId) : new Identifier("minecraft", itemId);

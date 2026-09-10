@@ -31,6 +31,22 @@ public final class MaidCrafting {
      * @return null 表示成功，否则返回失败原因
      */
     public static String craft(ServerPlayerEntity maid, String itemId) {
+        // 木板：任意树种的原木都能做（世界里有云杉/白桦等，不能只认橡木）
+        if (itemId.equals("oak_planks")) {
+            if (MaidActions.countItem(maid, "oak_planks") >= 64) {
+                return null;
+            }
+            String logType = MaidActions.findLogType(maid);
+            if (logType != null) {
+                MaidActions.consume(maid, logType, 1);
+                MaidActions.give(maid, "oak_planks", 4);
+                AiMaidMod.LOGGER.info("[AI-Maid] {} crafted oak_planks x4 (from {})",
+                        maid.getGameProfile().getName(), logType);
+                return null;
+            }
+            return "没有原木可以做成木板";
+        }
+
         Recipe.CraftRecipe recipe = Recipe.getCraftRecipe(itemId);
         if (recipe == null) {
             return "没有 " + itemId + " 的配方";

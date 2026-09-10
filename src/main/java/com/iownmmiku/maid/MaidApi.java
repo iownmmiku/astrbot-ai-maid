@@ -94,6 +94,12 @@ public final class MaidApi {
                     return "未知目标：" + goalName;
                 }
             }
+            case "llm_decision": {
+                boolean enabled = !req.has("enabled") || req.get("enabled").getAsBoolean();
+                GoalScheduler.setLlmDecisionEnabled(enabled);
+                out.addProperty("llm_decision", enabled);
+                return null;
+            }
             case "get_goals": {
                 MaidGoals.Goal current = GoalScheduler.getCurrentGoal(m);
                 if (current != null) {
@@ -236,6 +242,7 @@ public final class MaidApi {
         if (currentGoal != null) {
             o.addProperty("current_goal", currentGoal.name);
         }
+        o.addProperty("llm_decision", GoalScheduler.isLlmDecisionEnabled());
         Set<MaidGoals.GoalType> completed = GoalScheduler.getCompletedGoals(m);
         int survivalProgress = (int) completed.stream()
                 .filter(g -> MaidGoals.getSurvivalPath().stream().anyMatch(sg -> sg.type == g))

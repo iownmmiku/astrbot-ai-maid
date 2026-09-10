@@ -191,8 +191,37 @@ public final class MaidBrain {
      * @return true 表示本 tick 已执行了动作（挖/放/跳）
      */
     private static boolean negotiateTerrain(ServerPlayerEntity maid, double goalX, double goalZ) {
+        return negotiateTerrain(maid, goalX, maid.getY(), goalZ);
+    }
+
+    private static boolean negotiateTerrain(ServerPlayerEntity maid, double goalX, double goalY, double goalZ) {
         ServerWorld w = maid.getServerWorld();
         BlockPos feet = maid.getBlockPos();
+
+        // ===== 垂直处理：目标在上方 / 下方 =====
+        double dyTarget = goalY - maid.getY();
+        if (dyTarget > 1.2) {
+            // 目标在上方 → 挖头顶往上爬（先挖 2 格高，再挖 3 格）
+            for (int h = 2; h <= 3; h++) {
+                BlockPos up = feet.up(h);
+                if (!passable(maid, up) && Pathfinder.diggable(w, up)) {
+                    digWaypoint(maid, up);
+                    if (maid.isOnGround()) jumpOnce(maid);
+                    return true;
+                }
+            }
+        } else if (dyTarget < -1.2) {
+            // 目标在下方 → 挖脚下往下（安全：下方 2 格不是岩浆/水）
+            BlockPos below = feet.down();
+            BlockPos below2 = feet.down(2);
+            boolean safe = !w.getBlockState(below2).isOf(net.minecraft.block.Blocks.LAVA)
+                    && !w.getBlockState(below2).isOf(net.minecraft.block.Blocks.WATER)
+                    && Pathfinder.diggable(w, below);
+            if (safe && !passable(maid, below)) {
+                digWaypoint(maid, below);
+                return true;
+            }
+        }
         BlockPos front = frontToward(maid, goalX, goalZ);
         BlockPos frontFeet = new BlockPos(front.getX(), feet.getY(), front.getZ());
         BlockPos frontHead = frontFeet.up();
@@ -364,8 +393,8 @@ public final class MaidBrain {
                 }
                 goalX = wp.getX() + 0.5;
                 goalZ = wp.getZ() + 0.5;
-                // 地形协商：搭桥 / 跳台阶 / 挖墙
-                if (negotiateTerrain(maid, goalX, goalZ)) {
+                // 地形协商：搭桥 / 跳台阶 / 挖墙 / 挖头顶 / 挖脚下
+                if (negotiateTerrain(maid, goalX, wp.getY(), goalZ)) {
                     maid.tickMovement();
                     continue;
                 }
