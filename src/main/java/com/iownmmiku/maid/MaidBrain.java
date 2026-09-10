@@ -100,6 +100,10 @@ public final class MaidBrain {
         stop(maid);  // 清掉移动任务
     }
 
+    public static BuildTask getBuildTask(ServerPlayerEntity maid) {
+        return BUILD_TASKS.get(key(maid));
+    }
+
     private static String key(ServerPlayerEntity maid) {
         return maid.getGameProfile().getName().toLowerCase();
     }
@@ -149,7 +153,10 @@ public final class MaidBrain {
             // 1. 生存本能（饿了吃、打怪、躲）
             SurvivalLogic.tick(maid);
 
-            // 2. 建筑任务优先
+            // 2. 智能调度器（管理目标）
+            GoalScheduler.tick(maid);
+
+            // 3. 建筑任务优先
             BuildTask bt = BUILD_TASKS.get(k);
             if (bt != null) {
                 if (bt.isDone()) {

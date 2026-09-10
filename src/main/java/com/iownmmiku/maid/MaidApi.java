@@ -12,6 +12,7 @@ import net.minecraft.world.GameMode;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 
 /**
  * 女仆的对外 API：指令和桥都走这里。
@@ -79,6 +80,41 @@ public final class MaidApi {
                 String mode = req.has("mode") ? req.get("mode").getAsString() : "survival";
                 GameMode gm = GameMode.byName(mode, GameMode.SURVIVAL);
                 m.changeGameMode(gm);
+                return null;
+            }
+            case "set_goal": {
+                String goalName = req.has("goal") ? req.get("goal").getAsString() : "";
+                try {
+                    MaidGoals.GoalType type = MaidGoals.GoalType.valueOf(goalName.toUpperCase());
+                    GoalScheduler.setGoal(m, type);
+                    MaidGoals.Goal goal = MaidGoals.get(type);
+                    out.addProperty("goal", goal.name);
+                    return null;
+                } catch (IllegalArgumentException e) {
+                    return "未知目标：" + goalName;
+                }
+            }
+            case "get_goals": {
+                MaidGoals.Goal current = GoalScheduler.getCurrentGoal(m);
+                if (current != null) {
+                    out.addProperty("current_goal", current.name);
+                    out.addProperty("current_description", current.description);
+                }
+                Set<MaidGoals.GoalType> completed = GoalScheduler.getCompletedGoals(m);
+                com.google.gson.JsonArray completedArr = new com.google.gson.JsonArray();
+                for (MaidGoals.GoalType t : completed) {
+                    completedArr.add(MaidGoals.get(t).name);
+                }
+                out.add("completed", completedArr);
+                
+                com.google.gson.JsonArray survivalPath = new com.google.gson.JsonArray();
+                for (MaidGoals.Goal g : MaidGoals.getSurvivalPath()) {
+                    com.google.gson.JsonObject gObj = new com.google.gson.JsonObject();
+                    gObj.addProperty("name", g.name);
+                    gObj.addProperty("completed", completed.contains(g.type));
+                    survivalPath.add(gObj);
+                }
+                out.add("survival_path", survivalPath);
                 return null;
             }
             default:
@@ -194,6 +230,18 @@ public final class MaidApi {
         o.addProperty("on_ground", m.isOnGround());
         o.addProperty("game_mode", m.interactionManager.getGameMode().getName());
         o.addProperty("task", MaidBrain.describe(m));
+        
+        // 目标系统状态
+        MaidGoals.Goal currentGoal = GoalScheduler.getCurrentGoal(m);
+        if (currentGoal != null) {
+            o.addProperty("current_goal", currentGoal.name);
+        }
+        Set<MaidGoals.GoalType> completed = GoalScheduler.getCompletedGoals(m);
+        int survivalProgress = (int) completed.stream()
+                .filter(g -> MaidGoals.getSurvivalPath().stream().anyMatch(sg -> sg.type == g))
+                .count();
+        o.addProperty("survival_progress", survivalProgress + "/" + MaidGoals.getSurvivalPath().size());
+        
         JsonArray inv = new JsonArray();
         List<String> items = MaidActions.inventory(m);
         for (String s : items) {
