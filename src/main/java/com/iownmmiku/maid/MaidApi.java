@@ -35,9 +35,16 @@ public final class MaidApi {
         ServerPlayerEntity m = maid(server);
         switch (cmd) {
             case "spawn": {
-                double x = opt(req, "x", 0);
-                double y = opt(req, "y", 64);
-                double z = opt(req, "z", 0);
+                // 不给坐标就用世界出生点，并自动找一块能站的地面
+                net.minecraft.util.math.BlockPos sp = server.getOverworld().getSpawnPos();
+                double x = opt(req, "x", sp.getX() + 0.5);
+                double y = opt(req, "y", sp.getY() + 1);
+                double z = opt(req, "z", sp.getZ() + 0.5);
+                net.minecraft.util.math.BlockPos stand = Pathfinder.standableNear(
+                        server.getOverworld(), (int) Math.floor(x), (int) Math.floor(y), (int) Math.floor(z));
+                if (stand != null) {
+                    y = stand.getY();
+                }
                 Maids.spawn(server, DEFAULT_NAME, x, y, z);
                 return null;
             }
@@ -49,6 +56,11 @@ public final class MaidApi {
                     return null;
                 }
                 out.add("maid", status(m));
+                JsonArray pl = new JsonArray();
+                for (ServerPlayerEntity p : server.getPlayerManager().getPlayerList()) {
+                    pl.add(p.getGameProfile().getName());
+                }
+                out.add("players", pl);
                 return null;
             }
             case "say": {
@@ -162,6 +174,11 @@ public final class MaidApi {
         ItemStack hand = m.getMainHandStack();
         o.addProperty("hand", hand.isEmpty() ? ""
                 : Registries.ITEM.getId(hand.getItem()).toString() + " x" + hand.getCount());
+        JsonArray players = new JsonArray();
+        for (ServerPlayerEntity p : m.getServer().getPlayerManager().getPlayerList()) {
+            players.add(p.getGameProfile().getName());
+        }
+        o.add("players", players);
         return o;
     }
 
