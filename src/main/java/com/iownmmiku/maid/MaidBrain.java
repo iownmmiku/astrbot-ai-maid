@@ -24,6 +24,8 @@ public final class MaidBrain {
     private static final Map<String, BuildTask> BUILD_TASKS = new HashMap<>();
     private static final Map<String, double[]> LAST_POS = new HashMap<>();
     private static final Map<String, Integer> STUCK_TICKS = new HashMap<>();
+    /** 直线模式受阻计数（用于触发绕路重规划）。 */
+    private static final Map<String, Integer> REPLAN_TICKS = new HashMap<>();
     /** 最近一次到达的目标点，用于去重（防止到点后被反复重新下达） */
     private static final Map<String, double[]> LAST_ARRIVED = new HashMap<>();
 
@@ -137,6 +139,109 @@ public final class MaidBrain {
     public static void digWaypoint(ServerPlayerEntity maid, BlockPos p) {
         MaidActions.equipBestTool(maid, p);
         MaidActions.mine(maid, p);
+    }
+
+    /** 朝目标方向的 1 格（脚部高度）。 */
+    private static BlockPos frontToward(ServerPlayerEntity maid, double gx, double gz) {
+        double dx = gx - maid.getX();
+        double dz = gz - maid.getZ();
+        double len = Math.hypot(dx, dz);
+        int bx = 0, bz = 0;
+        if (len > 1e-6) {
+            bx = (int) Math.round(dx / len);
+            bz = (int) Math.round(dz / len);
+        }
+        if (bx == 0 && bz == 0) {
+            bz = 1;
+        }
+        return maid.getBlockPos().add(bx, 0, bz);
+    }
+
+    /** 搭桥：在 target 放一个方块（依次尝试数种常见方块）。 */
+    private static boolean placeBridge(ServerPlayerEntity maid, BlockPos target) {
+        String[] mats = {"cobblestone", "dirt", "oak_planks", "oak_log", "stone",
+                "andesite", "gravel", "sand", "netherrack"};
+        for (String m : mats) {
+            if (MaidActions.countItem(maid, m) > 0) {
+                if (MaidActions.hold(maid, m) == null) {
+                    return MaidActions.place(maid, target) == null;
+                }
+            }
+        }
+        return false;
+    }
+
+    /** 强制重新规划路径（用于绕路）。 */
+    public static void forceReplan(ServerPlayerEntity maid, double x, double z) {
+        String k = key(maid);
+        PATH.remove(k);
+        PATH_IDX.remove(k);
+        TARGETS.remove(k);
+        LAST_ARRIVED.remove(k);
+        gotoTo(maid, x, z);
+    }
+
+    /**
+     * 地形协商：走向目标时处理障碍。
+     * - 前方是沟/悬崖 → 搭桥（有材料）或标记需要绕路
+     * - 前方 1 格台阶 → 跳
+     * - 前方 ≥2 格墙 → 挖开（脚+头）
+     * - 挖不动（基岩/黑曜石）→ 返回 false 让上层绕路
+     *
+     * @return true 表示本 tick 已执行了动作（挖/放/跳）
+     */
+    private static boolean negotiateTerrain(ServerPlayerEntity maid, double goalX, double goalZ) {
+        ServerWorld w = maid.getServerWorld();
+        BlockPos feet = maid.getBlockPos();
+        BlockPos front = frontToward(maid, goalX, goalZ);
+        BlockPos frontFeet = new BlockPos(front.getX(), feet.getY(), front.getZ());
+        BlockPos frontHead = frontFeet.up();
+        BlockPos frontGround = frontFeet.down();
+
+        boolean gapUnder = passable(maid, frontGround);
+        boolean feetBlocked = !passable(maid, frontFeet);
+        boolean headBlocked = !passable(maid, frontHead);
+
+        // 1. 前方悬空（沟/悬崖）→ 搭桥
+        if (gapUnder && !feetBlocked) {
+            if (placeBridge(maid, frontGround)) {
+                return true;
+            }
+            return false;   // 没材料搭桥 → 上层绕路
+        }
+
+        // 2. 前方脚下有地
+        if (feetBlocked) {
+            if (!headBlocked) {
+                // 只有脚部被挡 → 1 格台阶，跳上去
+                if (maid.isOnGround()) {
+                    jumpOnce(maid);
+                    return true;
+                }
+                return false;
+            }
+            // 脚 + 头都被挡 → 墙，挖开
+            if (Pathfinder.diggable(w, frontFeet)) {
+                digWaypoint(maid, frontFeet);
+                return true;
+            }
+            if (Pathfinder.diggable(w, frontHead)) {
+                digWaypoint(maid, frontHead);
+                return true;
+            }
+            return false;   // 挖不动 → 绕路
+        }
+
+        // 3. 只有头部被挡 → 挖掉头部的方块
+        if (headBlocked) {
+            if (Pathfinder.diggable(w, frontHead)) {
+                digWaypoint(maid, frontHead);
+                return true;
+            }
+            return false;
+        }
+
+        return false;   // 畅通
     }
 
     private static String key(ServerPlayerEntity maid) {
@@ -259,6 +364,11 @@ public final class MaidBrain {
                 }
                 goalX = wp.getX() + 0.5;
                 goalZ = wp.getZ() + 0.5;
+                // 地形协商：搭桥 / 跳台阶 / 挖墙
+                if (negotiateTerrain(maid, goalX, goalZ)) {
+                    maid.tickMovement();
+                    continue;
+                }
                 double flatDist = Math.hypot(goalX - maid.getX(), goalZ - maid.getZ());
                 double dy = wp.getY() - maid.getY();
                 if (flatDist < 0.6 && dy > -1.2) {
@@ -285,8 +395,22 @@ public final class MaidBrain {
                     maid.tickMovement();
                     continue;
                 }
+                // 直线模式：也做地形协商（挖障碍 / 搭桥 / 跳台阶）
+                if (negotiateTerrain(maid, goalX, goalZ)) {
+                    maid.tickMovement();
+                    continue;
+                }
+                // 前方死路（挖不动或没材料搭桥）→ 重新规划绕路
                 if (maid.horizontalCollision && maid.isOnGround()) {
-                    jumpOnce(maid);
+                    REPLAN_TICKS.merge(k, 1, Integer::sum);
+                    if (REPLAN_TICKS.get(k) % 20 == 0) {
+                        forceReplan(maid, goalX, goalZ);
+                        AiMaidMod.LOGGER.info("[AI-Maid] {} 前方受阻，重新规划绕路", k);
+                    } else {
+                        jumpOnce(maid);
+                    }
+                } else {
+                    REPLAN_TICKS.remove(k);
                 }
             }
 
@@ -303,7 +427,7 @@ public final class MaidBrain {
                 maid.setJumping(true);
             }
 
-            // 卡死检测：2 秒没动跳一下，4 秒没动放弃路径改直线
+            // 卡死检测：没动就挖开面前障碍自救（不再只是跳一下）
             double[] lp = LAST_POS.get(k);
             if (lp != null) {
                 double moved = Math.hypot(lp[0] - maid.getX(), lp[2] - maid.getZ());
@@ -311,14 +435,15 @@ public final class MaidBrain {
                 if (moved < 0.05) {
                     stuck++;
                     STUCK_TICKS.put(k, stuck);
-                    if (stuck == 40) {
-                        jumpOnce(maid);
+                    if (stuck % 10 == 0) {       // 每 0.5 秒尝试一次地形处理
+                        negotiateTerrain(maid, goalX, goalZ);
                     }
-                    if (stuck > 80) {
+                    if (stuck > 60) {            // 3 秒还不行 → 清路径、重新规划绕路
                         PATH.remove(k);
                         PATH_IDX.remove(k);
                         STUCK_TICKS.remove(k);
-                        AiMaidMod.LOGGER.warn("[AI-Maid] {} stuck, falling back to straight line", k);
+                        forceReplan(maid, goalX, goalZ);
+                        AiMaidMod.LOGGER.info("[AI-Maid] {} 长时间卡住，强制重新规划", k);
                     }
                 } else {
                     STUCK_TICKS.remove(k);
