@@ -114,6 +114,18 @@ public final class MaidBrain {
         return BUILD_TASKS.get(key(maid));
     }
 
+    /** 这个位置能不能通过（无碰撞）。 */
+    private static boolean passable(ServerPlayerEntity maid, BlockPos p) {
+        ServerWorld w = maid.getServerWorld();
+        return w.getBlockState(p).getCollisionShape(w, p).isEmpty();
+    }
+
+    /** 挖开挡路的方块，给寻路开路。 */
+    public static void digWaypoint(ServerPlayerEntity maid, BlockPos p) {
+        MaidActions.equipBestTool(maid, p);
+        MaidActions.mine(maid, p);
+    }
+
     private static String key(ServerPlayerEntity maid) {
         return maid.getGameProfile().getName().toLowerCase();
     }
@@ -219,6 +231,17 @@ public final class MaidBrain {
                     continue;
                 }
                 BlockPos wp = path.get(idx);
+                // 破障：路径点被方块挡住 → 挖开再走
+                if (!passable(maid, wp)) {
+                    digWaypoint(maid, wp);
+                    maid.tickMovement();
+                    continue;
+                }
+                if (!passable(maid, wp.up())) {
+                    digWaypoint(maid, wp.up());
+                    maid.tickMovement();
+                    continue;
+                }
                 goalX = wp.getX() + 0.5;
                 goalZ = wp.getZ() + 0.5;
                 double flatDist = Math.hypot(goalX - maid.getX(), goalZ - maid.getZ());
@@ -258,6 +281,11 @@ public final class MaidBrain {
             maid.setHeadYaw(yaw);
             maid.forwardSpeed = 1.0F;
             maid.sidewaysSpeed = 0.0F;
+
+            // 游泳：在水里就往上游，防止淹死
+            if (maid.isTouchingWater()) {
+                maid.setJumping(true);
+            }
 
             // 卡死检测：2 秒没动跳一下，4 秒没动放弃路径改直线
             double[] lp = LAST_POS.get(k);

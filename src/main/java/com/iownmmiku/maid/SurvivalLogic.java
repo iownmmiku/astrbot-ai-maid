@@ -100,9 +100,7 @@ public final class SurvivalLogic {
             return true;
         }
         MaidBrain.stop(maid);
-        MaidActions.lookAt(maid, target.getPos());
-        maid.attack(target);
-        maid.swingHand(Hand.MAIN_HAND);
+        MaidActions.attack(maid, target);
         return true;
     }
 
@@ -134,10 +132,11 @@ public final class SurvivalLogic {
     }
 
     private static void fightBack(ServerPlayerEntity maid, LivingEntity threat) {
-        // 面向敌人并攻击
-        MaidActions.lookAt(maid, threat.getPos());
-        maid.attack(threat);
-        maid.swingHand(Hand.MAIN_HAND);
-        // 冷却 1 秒再打下一次（原版攻击冷却）
+        // 远了先追，贴脸再打
+        if (maid.distanceTo(threat) > 3.0) {
+            MaidBrain.gotoTo(maid, threat.getX(), threat.getZ());
+        } else {
+            MaidActions.attack(maid, threat);
+        }
     }
 }

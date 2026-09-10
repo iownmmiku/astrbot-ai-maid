@@ -326,8 +326,7 @@ public final class GoalExecutor {
             MaidBrain.gotoTo(maid, target.getX(), target.getZ());
             return "追逐动物";
         }
-        MaidActions.lookAt(maid, target.getPos());
-        maid.attack(target);
+        MaidActions.attack(maid, target);
         return "狩猎 " + have + "/16";
     }
 
