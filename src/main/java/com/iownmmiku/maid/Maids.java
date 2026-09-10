@@ -30,6 +30,8 @@ public final class Maids {
         player.setPos(x, y, z);
 
         MAIDS.put(name.toLowerCase(), player);
+        // 强制生存模式（服务器默认可能是 creative，但女仆需要真实生存）
+        player.changeGameMode(net.minecraft.world.GameMode.SURVIVAL);
         AiMaidMod.LOGGER.info("[AI-Maid] spawned {} at ({}, {}, {})", name, x, y, z);
         return player;
     }
