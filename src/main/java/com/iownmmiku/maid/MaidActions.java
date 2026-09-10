@@ -116,4 +116,26 @@ public final class MaidActions {
         }
         return out;
     }
+
+    /** 统计背包里某物品的总数。 */
+    public static int countItem(ServerPlayerEntity maid, String itemId) {
+        Identifier id = itemId.contains(":") ? new Identifier(itemId) : new Identifier("minecraft", itemId);
+        if (!Registries.ITEM.containsId(id)) {
+            return 0;
+        }
+        Item target = Registries.ITEM.get(id);
+        int total = 0;
+        PlayerInventory inv = maid.getInventory();
+        for (int i = 0; i < inv.size(); i++) {
+            ItemStack s = inv.getStack(i);
+            if (!s.isEmpty() && s.getItem() == target) {
+                total += s.getCount();
+            }
+        }
+        ItemStack off = maid.getOffHandStack();
+        if (!off.isEmpty() && off.getItem() == target) {
+            total += off.getCount();
+        }
+        return total;
+    }
 }

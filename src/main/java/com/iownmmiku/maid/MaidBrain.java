@@ -1,6 +1,8 @@
 package com.iownmmiku.maid;
 
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
+import net.minecraft.item.ItemStack;
+import net.minecraft.registry.Registries;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
@@ -19,6 +21,7 @@ public final class MaidBrain {
     private static final Map<String, Integer> PATH_IDX = new HashMap<>();
     private static final Map<String, double[]> TARGETS = new HashMap<>();
     private static final Map<String, Integer> JUMP_TICKS = new HashMap<>();
+    private static final Map<String, BuildTask> BUILD_TASKS = new HashMap<>();
 
     private MaidBrain() {
     }
@@ -63,6 +66,7 @@ public final class MaidBrain {
         PATH.remove(k);
         PATH_IDX.remove(k);
         TARGETS.remove(k);
+        BUILD_TASKS.remove(k);
         maid.forwardSpeed = 0.0F;
         maid.sidewaysSpeed = 0.0F;
     }
@@ -73,6 +77,10 @@ public final class MaidBrain {
 
     public static String describe(ServerPlayerEntity maid) {
         String k = key(maid);
+        BuildTask bt = BUILD_TASKS.get(k);
+        if (bt != null) {
+            return "building " + bt.progress() + "/" + bt.total();
+        }
         List<BlockPos> path = PATH.get(k);
         if (path != null) {
             int idx = PATH_IDX.getOrDefault(k, 0);
@@ -86,14 +94,81 @@ public final class MaidBrain {
                 t[0], t[1], Math.hypot(t[0] - maid.getX(), t[1] - maid.getZ()));
     }
 
+    public static void startBuild(ServerPlayerEntity maid, BuildTask task) {
+        String k = key(maid);
+        BUILD_TASKS.put(k, task);
+        stop(maid);  // 清掉移动任务
+    }
+
     private static String key(ServerPlayerEntity maid) {
         return maid.getGameProfile().getName().toLowerCase();
+    }
+
+    private static void tickBuild(ServerPlayerEntity maid, BuildTask task) {
+        BuildTask.Placement cur = task.current();
+        if (cur == null) {
+            return;
+        }
+        BlockPos target = cur.pos;
+        double dist = Math.hypot(target.getX() + 0.5 - maid.getX(), target.getZ() + 0.5 - maid.getZ());
+
+        // 离得远就先走过去
+        if (dist > 4.5) {
+            gotoTo(maid, target.getX() + 0.5, target.getZ() + 0.5);
+            return;
+        }
+        // 停下来准备放
+        stop(maid);
+
+        // 手上拿对的方块
+        String need = cur.blockId.replace("minecraft:", "");
+        ItemStack hand = maid.getMainHandStack();
+        if (hand.isEmpty() || !Registries.ITEM.getId(hand.getItem()).getPath().equals(need)) {
+            String err = MaidActions.hold(maid, need);
+            if (err != null) {
+                task.fail(err);
+                return;
+            }
+        }
+        // 放下
+        String err = MaidActions.place(maid, target);
+        if (err == null) {
+            task.advance();
+            MaidEvents.placed(maid, target);
+            AiMaidMod.LOGGER.debug("[AI-Maid] {} placed {} at ({},{},{})",
+                    key(maid), cur.blockId, target.getX(), target.getY(), target.getZ());
+        } else {
+            task.fail(err);
+        }
     }
 
     private static void onTick(MinecraftServer server) {
         for (ServerPlayerEntity maid : Maids.all().values()) {
             String k = key(maid);
 
+            // 1. 生存本能（饿了吃、打怪、躲）
+            SurvivalLogic.tick(maid);
+
+            // 2. 建筑任务优先
+            BuildTask bt = BUILD_TASKS.get(k);
+            if (bt != null) {
+                if (bt.isDone()) {
+                    if (bt.getError() != null) {
+                        AiMaidMod.LOGGER.warn("[AI-Maid] {} build failed: {}", k, bt.getError());
+                        MaidEvents.buildFailed(maid, bt.getError());
+                    } else {
+                        AiMaidMod.LOGGER.info("[AI-Maid] {} build complete ({} blocks)", k, bt.total());
+                        MaidEvents.buildComplete(maid, bt.total());
+                    }
+                    BUILD_TASKS.remove(k);
+                } else {
+                    tickBuild(maid, bt);
+                }
+                maid.tickMovement();
+                continue;
+            }
+
+            // 3. 跳跃
             Integer jt = JUMP_TICKS.get(k);
             if (jt != null && jt > 0) {
                 maid.setJumping(true);
@@ -106,6 +181,7 @@ public final class MaidBrain {
                 maid.setJumping(false);
             }
 
+            // 4. 移动（路径 / 直线）
             double goalX;
             double goalZ;
 

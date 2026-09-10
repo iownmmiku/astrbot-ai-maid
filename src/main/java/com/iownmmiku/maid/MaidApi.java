@@ -10,6 +10,7 @@ import net.minecraft.text.Text;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.GameMode;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -146,6 +147,34 @@ public final class MaidApi {
             case "health": {
                 m.setHealth(20.0F);
                 m.getHungerManager().setFoodLevel(20);
+                return null;
+            }
+            case "build": {
+                if (!req.has("plan")) {
+                    return "缺少 plan 参数";
+                }
+                com.google.gson.JsonArray arr = req.getAsJsonArray("plan");
+                List<BuildTask.Placement> rawPlan = new ArrayList<>();
+                for (int i = 0; i < arr.size(); i++) {
+                    com.google.gson.JsonObject p = arr.get(i).getAsJsonObject();
+                    int x = p.get("x").getAsInt();
+                    int y = p.get("y").getAsInt();
+                    int z = p.get("z").getAsInt();
+                    String block = p.get("block").getAsString();
+                    rawPlan.add(new BuildTask.Placement(new BlockPos(x, y, z), block));
+                }
+                // 检查材料
+                String errMat = BuildTask.checkMaterials(m, rawPlan);
+                if (errMat != null) {
+                    return errMat;
+                }
+                // 排序（从下到上、从近到远）
+                List<BuildTask.Placement> sorted = BuildTask.sortPlan(m, rawPlan);
+                BuildTask task = new BuildTask(sorted);
+                MaidBrain.startBuild(m, task);
+                out.addProperty("blocks", sorted.size());
+                AiMaidMod.LOGGER.info("[AI-Maid] {} starting build: {} blocks", 
+                        m.getGameProfile().getName(), sorted.size());
                 return null;
             }
             default:

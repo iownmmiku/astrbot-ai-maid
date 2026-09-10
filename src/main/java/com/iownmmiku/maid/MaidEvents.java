@@ -51,6 +51,22 @@ public final class MaidEvents {
         BridgeServer.emit(o);
     }
 
+    public static void buildComplete(ServerPlayerEntity m, int total) {
+        JsonObject o = new JsonObject();
+        o.addProperty("event", "build_complete");
+        o.addProperty("who", key(m));
+        o.addProperty("blocks", total);
+        BridgeServer.emit(o);
+    }
+
+    public static void buildFailed(ServerPlayerEntity m, String reason) {
+        JsonObject o = new JsonObject();
+        o.addProperty("event", "build_failed");
+        o.addProperty("who", key(m));
+        o.addProperty("reason", reason);
+        BridgeServer.emit(o);
+    }
+
     /** 每 tick 检查血量/饥饿的变化。 */
     public static void tick(MinecraftServer server) {
         for (ServerPlayerEntity m : Maids.all().values()) {
