@@ -53,25 +53,28 @@ public final class MaidCrafting {
             }
         }
 
-        // 2. 需要工作台的，先找或放一个
+        // 2. 需要工作台的，先找 / 放 / 造 一个
         BlockPos workbench = null;
         if (recipe.needsWorkbench) {
             workbench = findNearbyBlock(maid, Blocks.CRAFTING_TABLE, 8.0);
             if (workbench == null) {
-                // 尝试放一个工作台
-                if (MaidActions.countItem(maid, "crafting_table") > 0) {
-                    BlockPos place = maid.getBlockPos().add(1, 0, 0);
-                    String err = MaidActions.hold(maid, "crafting_table");
-                    if (err == null) {
-                        err = MaidActions.place(maid, place);
+                // 背包没工作台就先自己造一个（4 木板，2x2 可做，不需要工作台）
+                if (MaidActions.countItem(maid, "crafting_table") == 0) {
+                    String err = craft(maid, "crafting_table");
+                    if (err != null) {
+                        return "需要工作台，且造不出来：" + err;
                     }
-                    if (err == null) {
-                        workbench = place;
-                    } else {
-                        return "无法放置工作台：" + err;
-                    }
+                }
+                // 放到旁边
+                BlockPos place = findFreeSpotNear(maid);
+                String err = MaidActions.hold(maid, "crafting_table");
+                if (err == null && place != null) {
+                    err = MaidActions.place(maid, place);
+                }
+                if (err == null) {
+                    workbench = place;
                 } else {
-                    return "需要工作台但背包里没有（先合成 crafting_table）";
+                    return "无法放置工作台：" + err;
                 }
             }
         }
@@ -172,6 +175,26 @@ public final class MaidCrafting {
             }
         }
         return remain == 0;
+    }
+
+    /** 在脚下附近找一个空气方块（用来放工作台/熔炉）。 */
+    private static BlockPos findFreeSpotNear(ServerPlayerEntity maid) {
+        net.minecraft.server.world.ServerWorld w = maid.getServerWorld();
+        BlockPos base = maid.getBlockPos();
+        int[][] offsets = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}, {2, 0}, {-2, 0}, {0, 2}, {0, -2}};
+        for (int[] o : offsets) {
+            BlockPos p = base.add(o[0], 0, o[1]);
+            if (w.getBlockState(p).isAir() && !w.getBlockState(p.down()).getCollisionShape(w, p.down()).isEmpty()) {
+                return p;
+            }
+            BlockPos pu = p.up();
+            if (w.getBlockState(p).getCollisionShape(w, p).isEmpty()
+                    && w.getBlockState(pu).isAir()
+                    && !w.getBlockState(p.down()).getCollisionShape(w, p.down()).isEmpty()) {
+                return p;
+            }
+        }
+        return base.add(1, 0, 0);
     }
 
     private static BlockPos findNearbyBlock(ServerPlayerEntity maid, net.minecraft.block.Block block, double range) {

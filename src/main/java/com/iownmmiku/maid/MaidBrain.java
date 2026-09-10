@@ -24,6 +24,8 @@ public final class MaidBrain {
     private static final Map<String, BuildTask> BUILD_TASKS = new HashMap<>();
     private static final Map<String, double[]> LAST_POS = new HashMap<>();
     private static final Map<String, Integer> STUCK_TICKS = new HashMap<>();
+    /** 最近一次到达的目标点，用于去重（防止到点后被反复重新下达） */
+    private static final Map<String, double[]> LAST_ARRIVED = new HashMap<>();
 
     private MaidBrain() {
     }
@@ -34,19 +36,30 @@ public final class MaidBrain {
 
     /** 直线走过去（不走寻路）。 */
     public static void walkTo(ServerPlayerEntity maid, double x, double z) {
-        PATH.remove(key(maid));
-        PATH_IDX.remove(key(maid));
-        TARGETS.put(key(maid), new double[]{x, z});
+        String k = key(maid);
+        PATH.remove(k);
+        PATH_IDX.remove(k);
+        TARGETS.put(k, new double[]{x, z});
+        // 换了新目标 → 清掉旧的到达记录
+        double[] la = LAST_ARRIVED.get(k);
+        if (la == null || Math.hypot(la[0] - x, la[1] - z) > 0.5) {
+            LAST_ARRIVED.remove(k);
+        }
     }
 
     /** 走 A* 路径。返回路径长度；-1 表示找不到路（已回退成直线）。 */
     public static int gotoTo(ServerPlayerEntity maid, double x, double z) {
         String k = key(maid);
+        // 刚到达过这个点、而且人还在附近 → 不重复下达（防止到点后被每 tick 反复指令）
+        double[] la = LAST_ARRIVED.get(k);
+        if (la != null && Math.hypot(la[0] - x, la[1] - z) < 0.5
+                && Math.hypot(maid.getX() - x, maid.getZ() - z) < 2.0) {
+            return 0;
+        }
         // 已经在去这个目标的路上 → 沿用现有路径，不重算（避免每 tick 刷屏）
         double[] cur = TARGETS.get(k);
-        if (cur != null && PATH.containsKey(k) &&
-                Math.abs(cur[0] - x) < 0.5 && Math.abs(cur[1] - z) < 0.5) {
-            return PATH.get(k).size();
+        if (cur != null && Math.abs(cur[0] - x) < 0.5 && Math.abs(cur[1] - z) < 0.5) {
+            return PATH.containsKey(k) ? PATH.get(k).size() : 0;
         }
         ServerWorld w = maid.getServerWorld();
         BlockPos start = maid.getBlockPos();
@@ -65,7 +78,7 @@ public final class MaidBrain {
         PATH.put(k, path);
         PATH_IDX.put(k, 0);
         TARGETS.put(k, new double[]{x, z});
-        AiMaidMod.LOGGER.info("[AI-Maid] {} path: {} nodes -> ({}, {}, {})",
+        AiMaidMod.LOGGER.debug("[AI-Maid] {} path: {} nodes -> ({}, {}, {})",
                 k, path.size(), goal.getX(), goal.getY(), goal.getZ());
         return path.size();
     }
@@ -224,7 +237,9 @@ public final class MaidBrain {
                     if (rem > 2.0) {
                         walkTo(maid, tgt[0], tgt[1]);
                     } else {
+                        if (tgt != null) LAST_ARRIVED.put(k, new double[]{tgt[0], tgt[1]});
                         stop(maid);
+                        AiMaidMod.LOGGER.debug("[AI-Maid] {} arrived (path end)", k);
                         MaidEvents.arrived(maid, maid.getX(), maid.getY(), maid.getZ());
                     }
                     maid.tickMovement();
@@ -263,8 +278,9 @@ public final class MaidBrain {
                 goalX = t[0];
                 goalZ = t[1];
                 if (Math.hypot(goalX - maid.getX(), goalZ - maid.getZ()) < 1.0) {
+                    LAST_ARRIVED.put(k, new double[]{t[0], t[1]});
                     stop(maid);
-                    AiMaidMod.LOGGER.info("[AI-Maid] {} arrived ({}, {})", k, t[0], t[1]);
+                    AiMaidMod.LOGGER.debug("[AI-Maid] {} arrived ({}, {})", k, t[0], t[1]);
                     MaidEvents.arrived(maid, maid.getX(), maid.getY(), maid.getZ());
                     maid.tickMovement();
                     continue;

@@ -81,6 +81,18 @@ public final class GoalExecutor {
         progress.putIfAbsent("home_x", maid.getBlockX());
         progress.putIfAbsent("home_z", maid.getBlockZ());
 
+        // 世界类型检测：超平坦/无树世界，直接明确报错，别白转圈
+        if (!progress.containsKey("world_checked")) {
+            progress.put("world_checked", 1);
+            // 从脚下一路往上找有没有天然方块（超平坦世界 Y 都很低且无树）
+            if (maid.getServerWorld().getTopY(
+                    net.minecraft.world.Heightmap.Type.WORLD_SURFACE,
+                    maid.getBlockX(), maid.getBlockZ()) < 0) {
+                AiMaidMod.LOGGER.warn("[AI-Maid] 当前世界疑似超平坦（地表 Y<0），没有树/石头/矿石，" +
+                        "生存线无法完成。请改用普通世界（level-type=normal）。");
+            }
+        }
+
         // 找附近的树（原木方块）
         BlockPos tree = findNearbyBlock(maid, Blocks.OAK_LOG, 24.0);
         if (tree == null) {
@@ -107,6 +119,21 @@ public final class GoalExecutor {
             }
             // 到达搜索点但没树 → 下一站
             progress.put("search_ring", ring + 1);
+            int sweeps = progress.getOrDefault("search_sweeps", 0);
+            if (ring + 1 >= 24) {
+                // 整整 3 圈都没树 → 这片区域真的没有树，别无限绕
+                progress.put("search_sweeps", sweeps + 1);
+                progress.put("search_ring", 0);
+                progress.put("home_x", maid.getBlockX());
+                progress.put("home_z", maid.getBlockZ());
+                if (sweeps + 1 >= 2) {
+                    AiMaidMod.LOGGER.warn("[AI-Maid] {} 连续 2 次大范围搜索都没找到树，" +
+                            "可能是超平坦/沙漠/海洋世界。建议改为普通世界。", maid.getGameProfile().getName());
+                    GoalScheduler.markBlocked(maid, MaidGoals.GoalType.GATHER_WOOD);
+                    return null;
+                }
+                return "这片区域没树，换个地方找";
+            }
             return "到达搜索点，继续找树";
         }
 
@@ -135,6 +162,16 @@ public final class GoalExecutor {
             return null;
         }
         // 一步一动作：每次 tick 只做一件事，防止疯狂合成
+        // 先确保有工作台（木镐/斧需要）
+        if (MaidActions.countItem(maid, "crafting_table") == 0
+                && findNearbyBlock(maid, Blocks.CRAFTING_TABLE, 8.0) == null) {
+            if (MaidActions.countItem(maid, "oak_planks") < 4) {
+                String err = MaidCrafting.craft(maid, "oak_planks");
+                return err != null ? "合成木板失败：" + err : "合成木板（准备做工作台）";
+            }
+            String err = MaidCrafting.craft(maid, "crafting_table");
+            return err != null ? "合成工作台失败：" + err : "合成工作台";
+        }
         if (MaidActions.countItem(maid, "oak_planks") < 10) {
             String err = MaidCrafting.craft(maid, "oak_planks");
             return err != null ? "合成木板失败：" + err : "合成木板";

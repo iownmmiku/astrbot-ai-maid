@@ -20,6 +20,8 @@ public final class GoalScheduler {
     private static final Map<String, MaidGoals.GoalType> CURRENT_GOAL = new HashMap<>();
     private static final Map<String, Map<String, Integer>> GOAL_PROGRESS = new HashMap<>();
     private static final Map<String, Set<MaidGoals.GoalType>> COMPLETED_GOALS = new HashMap<>();
+    /** 在当前环境下无法完成的目标（例如超平坦世界里的挖矿），不重试。 */
+    private static final Map<String, Set<MaidGoals.GoalType>> BLOCKED_GOALS = new HashMap<>();
 
     private GoalScheduler() {
     }
@@ -43,10 +45,13 @@ public final class GoalScheduler {
             String status = GoalExecutor.executeStep(maid, goal, progress);
 
             if (status == null) {
-                // 目标完成
-                completeGoal(maid, currentType);
+                // 目标完成（但如果被标记为"无法完成"，不算完成）
+                boolean blocked = BLOCKED_GOALS.getOrDefault(key, new HashSet<>()).contains(currentType);
                 CURRENT_GOAL.remove(key);
-                AiMaidMod.LOGGER.info("[AI-Maid] {} completed goal: {}", key, goal.name);
+                if (!blocked) {
+                    completeGoal(maid, currentType);
+                    AiMaidMod.LOGGER.info("[AI-Maid] {} completed goal: {}", key, goal.name);
+                }
             } else {
                 // 目标进行中
                 if (maid.age % 100 == 0) {  // 每 5 秒打印一次进度
@@ -75,10 +80,12 @@ public final class GoalScheduler {
         preAutoComplete(maid, key);
 
         Set<MaidGoals.GoalType> completed = COMPLETED_GOALS.getOrDefault(key, new HashSet<>());
+        Set<MaidGoals.GoalType> blocked = BLOCKED_GOALS.getOrDefault(key, new HashSet<>());
 
-        // 获取所有可执行的目标（前置已完成 + 材料够）
+        // 获取所有可执行的目标（前置已完成 + 材料够 + 未被标记无法完成）
         List<MaidGoals.Goal> available = MaidGoals.getAllGoals().stream()
                 .filter(g -> !completed.contains(g.type))
+                .filter(g -> !blocked.contains(g.type))
                 .filter(g -> canStart(maid, g, completed))
                 .sorted(Comparator.comparingInt(g -> g.priority))
                 .collect(Collectors.toList());
@@ -122,9 +129,10 @@ public final class GoalScheduler {
      * 检查目标是否可以开始。
      */
     private static boolean canStart(ServerPlayerEntity maid, MaidGoals.Goal goal, Set<MaidGoals.GoalType> completed) {
-        // 1. 检查前置目标
+        // 1. 检查前置目标（前置被标记无法完成的，后续也跳过）
+        Set<MaidGoals.GoalType> blocked = BLOCKED_GOALS.getOrDefault(key(maid), new HashSet<>());
         for (MaidGoals.GoalType prereq : goal.prerequisites) {
-            if (!completed.contains(prereq)) {
+            if (!completed.contains(prereq) || blocked.contains(prereq)) {
                 return false;
             }
         }
@@ -186,6 +194,21 @@ public final class GoalScheduler {
         ev.addProperty("event", "goal_completed");
         ev.addProperty("who", key);
         ev.addProperty("goal", goal.name);
+        BridgeServer.emit(ev);
+    }
+
+    /** 标记一个目标在当前环境下无法完成（不重试、其后续目标也跳过）。 */
+    public static void markBlocked(ServerPlayerEntity maid, MaidGoals.GoalType type) {
+        String key = key(maid);
+        BLOCKED_GOALS.computeIfAbsent(key, k -> new HashSet<>()).add(type);
+        MaidGoals.Goal goal = MaidGoals.get(type);
+        AiMaidMod.LOGGER.warn("[AI-Maid] {} 目标无法完成，跳过：{}", key, goal.name);
+
+        JsonObject ev = new JsonObject();
+        ev.addProperty("event", "goal_blocked");
+        ev.addProperty("who", key);
+        ev.addProperty("goal", goal.name);
+        ev.addProperty("reason", "当前环境无法完成（缺资源/世界类型不匹配）");
         BridgeServer.emit(ev);
     }
 
