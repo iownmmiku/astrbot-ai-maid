@@ -70,6 +70,10 @@ public final class GoalScheduler {
      */
     private static MaidGoals.GoalType selectNextGoal(ServerPlayerEntity maid) {
         String key = key(maid);
+
+        // 预扫描：目标物品已经满足但还没标记完成的目标 → 直接标记完成（防止背包已有材料导致卡死）
+        preAutoComplete(maid, key);
+
         Set<MaidGoals.GoalType> completed = COMPLETED_GOALS.getOrDefault(key, new HashSet<>());
 
         // 获取所有可执行的目标（前置已完成 + 材料够）
@@ -90,6 +94,28 @@ public final class GoalScheduler {
 
         // 默认：返回优先级最高的
         return available.get(0).type;
+    }
+
+    /** 把"目标物品已拥有"的目标直接标记完成（防止背包已有材料导致生存线卡死）。 */
+    private static void preAutoComplete(ServerPlayerEntity maid, String key) {
+        Set<MaidGoals.GoalType> done = COMPLETED_GOALS.getOrDefault(key, new HashSet<>());
+        for (MaidGoals.Goal g : MaidGoals.getAllGoals()) {
+            if (done.contains(g.type) || g.targetItems.isEmpty()) {
+                continue;
+            }
+            boolean allMet = true;
+            for (Map.Entry<String, Integer> e : g.targetItems.entrySet()) {
+                if (MaidActions.countItem(maid, e.getKey()) < e.getValue()) {
+                    allMet = false;
+                    break;
+                }
+            }
+            if (allMet) {
+                completeGoal(maid, g.type);
+                AiMaidMod.LOGGER.info("[AI-Maid] {} auto-completed goal: {} (items already owned)",
+                        key, g.name);
+            }
+        }
     }
 
     /**

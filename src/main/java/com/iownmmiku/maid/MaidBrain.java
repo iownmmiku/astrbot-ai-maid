@@ -22,6 +22,8 @@ public final class MaidBrain {
     private static final Map<String, double[]> TARGETS = new HashMap<>();
     private static final Map<String, Integer> JUMP_TICKS = new HashMap<>();
     private static final Map<String, BuildTask> BUILD_TASKS = new HashMap<>();
+    private static final Map<String, double[]> LAST_POS = new HashMap<>();
+    private static final Map<String, Integer> STUCK_TICKS = new HashMap<>();
 
     private MaidBrain() {
     }
@@ -40,6 +42,12 @@ public final class MaidBrain {
     /** 走 A* 路径。返回路径长度；-1 表示找不到路（已回退成直线）。 */
     public static int gotoTo(ServerPlayerEntity maid, double x, double z) {
         String k = key(maid);
+        // 已经在去这个目标的路上 → 沿用现有路径，不重算（避免每 tick 刷屏）
+        double[] cur = TARGETS.get(k);
+        if (cur != null && PATH.containsKey(k) &&
+                Math.abs(cur[0] - x) < 0.5 && Math.abs(cur[1] - z) < 0.5) {
+            return PATH.get(k).size();
+        }
         ServerWorld w = maid.getServerWorld();
         BlockPos start = maid.getBlockPos();
         BlockPos goal = Pathfinder.standableNear(w, (int) Math.floor(x),
@@ -66,7 +74,8 @@ public final class MaidBrain {
         PATH.remove(k);
         PATH_IDX.remove(k);
         TARGETS.remove(k);
-        BUILD_TASKS.remove(k);
+        LAST_POS.remove(k);
+        STUCK_TICKS.remove(k);
         maid.forwardSpeed = 0.0F;
         maid.sidewaysSpeed = 0.0F;
     }
@@ -242,6 +251,29 @@ public final class MaidBrain {
             maid.setHeadYaw(yaw);
             maid.forwardSpeed = 1.0F;
             maid.sidewaysSpeed = 0.0F;
+
+            // 卡死检测：2 秒没动跳一下，4 秒没动放弃路径改直线
+            double[] lp = LAST_POS.get(k);
+            if (lp != null) {
+                double moved = Math.hypot(lp[0] - maid.getX(), lp[2] - maid.getZ());
+                int stuck = STUCK_TICKS.getOrDefault(k, 0);
+                if (moved < 0.05) {
+                    stuck++;
+                    STUCK_TICKS.put(k, stuck);
+                    if (stuck == 40) {
+                        jumpOnce(maid);
+                    }
+                    if (stuck > 80) {
+                        PATH.remove(k);
+                        PATH_IDX.remove(k);
+                        STUCK_TICKS.remove(k);
+                        AiMaidMod.LOGGER.warn("[AI-Maid] {} stuck, falling back to straight line", k);
+                    }
+                } else {
+                    STUCK_TICKS.remove(k);
+                }
+            }
+            LAST_POS.put(k, new double[]{maid.getX(), maid.getY(), maid.getZ()});
 
             // 服务器不替玩家跑物理，必须自己调
             maid.tickMovement();

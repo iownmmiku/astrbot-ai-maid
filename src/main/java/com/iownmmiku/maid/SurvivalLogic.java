@@ -3,6 +3,7 @@ package com.iownmmiku.maid;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.LivingEntity;
 import net.minecraft.entity.mob.HostileEntity;
+import net.minecraft.entity.passive.AnimalEntity;
 import net.minecraft.entity.player.PlayerInventory;
 import net.minecraft.item.FoodComponent;
 import net.minecraft.item.Item;
@@ -26,9 +27,16 @@ public final class SurvivalLogic {
         if (maid.age % 20 != 0) {
             return;
         }
-        // 1. 饿了就吃
+        // 1. 饿了：先吃背包食物；没有食物就狩猎自救
         if (maid.getHungerManager().getFoodLevel() <= 6 && !maid.getHungerManager().isNotFull()) {
-            tryEat(maid);
+            if (!tryEat(maid)) {
+                if (!tryHunt(maid)) {
+                    // 附近没有动物 → 让调度器优先安排食物目标
+                    if (GoalScheduler.getCurrentGoal(maid) == null) {
+                        GoalScheduler.setGoal(maid, MaidGoals.GoalType.HUNT_FOOD);
+                    }
+                }
+            }
         }
         // 2. 附近有敌对生物 → 血少就躲，血够就打
         LivingEntity threat = findNearestThreat(maid, 12.0);
@@ -41,7 +49,8 @@ public final class SurvivalLogic {
         }
     }
 
-    private static void tryEat(ServerPlayerEntity maid) {
+    /** 尝试吃背包里的食物。返回是否吃到了。 */
+    private static boolean tryEat(ServerPlayerEntity maid) {
         PlayerInventory inv = maid.getInventory();
         for (int i = 0; i < inv.size(); i++) {
             ItemStack stack = inv.getStack(i);
@@ -70,8 +79,31 @@ public final class SurvivalLogic {
             maid.setStackInHand(Hand.MAIN_HAND, result);
             maid.clearActiveItem();
             AiMaidMod.LOGGER.debug("[AI-Maid] {} ate {}", maid.getGameProfile().getName(), item);
-            return;
+            return true;
         }
+        return false;
+    }
+
+    /** 背包没食物时：找附近的动物狩猎。返回是否找到了动物。 */
+    private static boolean tryHunt(ServerPlayerEntity maid) {
+        ServerWorld world = maid.getServerWorld();
+        Box box = maid.getBoundingBox().expand(24.0);
+        List<AnimalEntity> animals = world.getEntitiesByClass(AnimalEntity.class, box,
+                e -> e.isAlive() && !e.isBaby());
+        if (animals.isEmpty()) {
+            return false;
+        }
+        AnimalEntity target = animals.get(0);
+        double dist = maid.distanceTo(target);
+        if (dist > 3.0) {
+            MaidBrain.gotoTo(maid, target.getX(), target.getZ());
+            return true;
+        }
+        MaidBrain.stop(maid);
+        MaidActions.lookAt(maid, target.getPos());
+        maid.attack(target);
+        maid.swingHand(Hand.MAIN_HAND);
+        return true;
     }
 
     private static LivingEntity findNearestThreat(ServerPlayerEntity maid, double range) {

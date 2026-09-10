@@ -5,6 +5,7 @@ import com.mojang.authlib.properties.Property;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
+import net.minecraft.world.Heightmap;
 
 import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
@@ -22,6 +23,10 @@ public final class Maids {
         ServerWorld world = server.getOverworld();
         GameProfile profile = new GameProfile(uuidFor(name), name);
         profile.getProperties().put("textures", new Property("textures", SkinServer.textureProperty()));
+
+        // 强制放到地表（忽略传入的 y，避免生成在地下/虚空导致无法自主生存）
+        int surfaceY = world.getTopY(Heightmap.Type.WORLD_SURFACE, (int) Math.floor(x), (int) Math.floor(z));
+        y = surfaceY + 1.0;
 
         ServerPlayerEntity player = new ServerPlayerEntity(server, world, profile);
         FakeClientConnection connection = new FakeClientConnection();

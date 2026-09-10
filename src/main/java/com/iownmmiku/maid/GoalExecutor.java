@@ -70,25 +70,56 @@ public final class GoalExecutor {
         if (have >= 16) {
             return null;  // 完成
         }
+
+        // 记录搜索起点（家/出生点）
+        progress.putIfAbsent("home_x", maid.getBlockX());
+        progress.putIfAbsent("home_z", maid.getBlockZ());
+
         // 找附近的树（原木方块）
-        BlockPos tree = findNearbyBlock(maid, Blocks.OAK_LOG, 32.0);
+        BlockPos tree = findNearbyBlock(maid, Blocks.OAK_LOG, 24.0);
         if (tree == null) {
-            // 走远点找
-            progress.putIfAbsent("search_radius", 32);
-            int r = progress.get("search_radius");
-            if (r < 128) {
-                progress.put("search_radius", r + 16);
+            // 找不到树 → 环形主动搜索：向 8 个方向依次走 16~80 格，边走边找
+            int homeX = progress.get("home_x");
+            int homeZ = progress.get("home_z");
+            int ring = progress.getOrDefault("search_ring", 0);
+            if (ring > 40) {
+                // 40 站都没找到（=绕了 5 圈）→ 换起点重新搜
+                progress.put("search_ring", 0);
+                progress.put("home_x", maid.getBlockX());
+                progress.put("home_z", maid.getBlockZ());
+                return "这片区域没有树，换个地方找";
             }
-            return "找树中（半径 " + r + " 格）";
+            int dir = ring % 8;
+            int lap = ring / 8 + 1;
+            double ang = dir * Math.PI / 4.0;
+            int tx = homeX + (int) (Math.cos(ang) * 16 * lap);
+            int tz = homeZ + (int) (Math.sin(ang) * 16 * lap);
+            double dist = Math.hypot(tx - maid.getX(), tz - maid.getZ());
+            if (dist > 4.0) {
+                MaidBrain.gotoTo(maid, tx, tz);
+                return "搜索树木中（第 " + (ring + 1) + " 站，方向 " + dir + "，半径 " + 16 * lap + "）";
+            }
+            // 到达搜索点但没树 → 下一站
+            progress.put("search_ring", ring + 1);
+            return "到达搜索点，继续找树";
         }
-        // 走过去挖
+
+        // 找到树 → 走过去挖（重置搜索状态）
+        progress.put("search_ring", 0);
         double dist = maid.getPos().distanceTo(tree.toCenterPos());
-        if (dist > 5.0) {
+        if (dist > 4.5) {
             MaidBrain.gotoTo(maid, tree.getX() + 0.5, tree.getZ() + 0.5);
             return "前往树 (" + tree.getX() + ", " + tree.getZ() + ")";
         }
         MaidBrain.stop(maid);
-        MaidActions.mine(maid, tree);
+        // 有斧头用斧头，挖得快
+        if (MaidActions.countItem(maid, "wooden_axe") > 0) {
+            MaidActions.hold(maid, "wooden_axe");
+        }
+        String err = MaidActions.mine(maid, tree);
+        if (err != null) {
+            return "挖树失败：" + err;
+        }
         return "采集木头 " + have + "/16";
     }
 
@@ -123,10 +154,18 @@ public final class GoalExecutor {
         if (have >= 64) {
             return null;
         }
-        // 找石头（向下挖或找附近石头）
-        BlockPos stone = findNearbyBlock(maid, Blocks.STONE, 16.0);
+        // 找附近的石头；找不到就向下挖（地下总是有石头）
+        BlockPos stone = findNearbyBlock(maid, Blocks.STONE, 24.0);
         if (stone == null) {
-            stone = maid.getBlockPos().down();
+            BlockPos down = maid.getBlockPos().down();
+            net.minecraft.block.Block below = maid.getServerWorld().getBlockState(down).getBlock();
+            if (below == Blocks.DIRT || below == Blocks.GRASS_BLOCK || below == Blocks.STONE
+                    || below == Blocks.DEEPSLATE) {
+                stone = down;
+            } else {
+                // 原地挖脚下
+                stone = maid.getBlockPos();
+            }
         }
         double dist = maid.getPos().distanceTo(stone.toCenterPos());
         if (dist > 5.0) {
